@@ -1,0 +1,267 @@
+/**
+ * IK 中文分词  版本 5.0
+ * IK Analyzer release 5.0
+ * 
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * 源代码由林良益(linliangyi2005@gmail.com)提供
+ * 版权声明 2012，乌龙茶工作室
+ * provided by Linliangyi and copyright 2012 by Oolong studio
+ * 
+ * 
+ */
+package org.wltea.analyzer.dic;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
+
+import org.apache.commons.io.IOUtils;
+import org.apache.lucene.analysis.util.ResourceLoader;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.wltea.analyzer.cfg.Configuration;
+
+/**
+ * 词典管理类,单子模式
+ */
+public class Dictionary{
+
+
+	/*
+	 * 词典单子实例
+	 */
+	private static final Map<ResourceLoader,Dictionary> dictionaryMap = new HashMap<ResourceLoader, Dictionary>();
+	
+	/*
+	 * 主词典对象
+	 */
+	private DictSegment _MainDict;
+	
+	/*
+	 * 停止词词典 
+	 */
+	private DictSegment _StopWordDict;
+	/*
+	 * 量词词典
+	 */
+	private DictSegment _QuantifierDict;
+	
+	/**
+	 * 配置对象
+	 */
+	private Configuration cfg;
+	protected static Logger log = LoggerFactory.getLogger(Dictionary.class);
+	
+	private Dictionary(Configuration cfg){
+		this.cfg = cfg;
+		this.loadMainDict();
+		this.loadStopWordDict();
+		this.loadQuantifierDict();
+	}
+
+	/**
+	 * 获取词典单子实例
+	 * @return Dictionary 单例对象
+	 */
+	public static Dictionary getSingleton(ResourceLoader loader){
+		Dictionary singleton = dictionaryMap.get(loader);
+		if(singleton == null){
+			throw new IllegalStateException("词典尚未初始化，请先调用initial方法");
+		}
+		return singleton;
+	}
+	
+	/**
+	 * 批量加载新词条
+	 * @param words Collection<String>词条列表
+	 */
+	public void addWords(Collection<String> words){
+		if(words != null){
+			for(String word : words){
+				if (word != null) {
+					//批量加载词条到主内存词典中
+					this._MainDict.fillSegment(word.trim().toLowerCase().toCharArray());
+				}
+			}
+		}
+	}
+	
+	/**
+	 * 批量移除（屏蔽）词条
+	 * @param words
+	 */
+	public void disableWords(Collection<String> words){
+		if(words != null){
+			for(String word : words){
+				if (word != null) {
+					//批量屏蔽词条
+					this._MainDict.disableSegment(word.trim().toLowerCase().toCharArray());
+				}
+			}
+		}
+	}
+	
+	/**
+	 * 检索匹配主词典
+	 * @param charArray
+	 * @return Hit 匹配结果描述
+	 */
+	public Hit matchInMainDict(char[] charArray){
+		return this._MainDict.match(charArray);
+	}
+	
+	/**
+	 * 检索匹配主词典
+	 * @param charArray
+	 * @param begin
+	 * @param length
+	 * @return Hit 匹配结果描述
+	 */
+	public Hit matchInMainDict(char[] charArray , int begin, int length){
+		return this._MainDict.match(charArray, begin, length);
+	}
+	
+	/**
+	 * 检索匹配量词词典
+	 * @param charArray
+	 * @param begin
+	 * @param length
+	 * @return Hit 匹配结果描述
+	 */
+	public Hit matchInQuantifierDict(char[] charArray , int begin, int length){
+		return this._QuantifierDict.match(charArray, begin, length);
+	}
+	
+	
+	/**
+	 * 从已匹配的Hit中直接取出DictSegment，继续向下匹配
+	 * @param charArray
+	 * @param currentIndex
+	 * @param matchedHit
+	 * @return Hit
+	 */
+	public Hit matchWithHit(char[] charArray , int currentIndex , Hit matchedHit){
+		DictSegment ds = matchedHit.getMatchedDictSegment();
+		return ds.match(charArray, currentIndex, 1 , matchedHit);
+	}
+	
+	
+	/**
+	 * 判断是否是停止词
+	 * @param charArray
+	 * @param begin
+	 * @param length
+	 * @return boolean
+	 */
+	public boolean isStopWord(char[] charArray , int begin, int length){			
+		return this._StopWordDict.match(charArray, begin, length).isMatch();
+	}	
+	
+	/**
+	 * 加载主词典及扩展词典
+	 */
+	private void loadMainDict(){
+		//建立一个主词典实例
+		_MainDict = new DictSegment((char)0);
+		log.info("start load main dict");
+		InputStream in = null;
+		try {
+			in = this.cfg.getResourceLoader().openResource(Configuration.DICT_FILE);
+			loadDict(_MainDict, in, Configuration.DICT_FILE);
+		} catch (IOException e) {
+			log.error("Main Dictionary loading exception.");
+			e.printStackTrace();
+		} finally {
+			if(in == null){
+				throw new RuntimeException("Main Dictionary can not be load!!!");
+			}
+			if(in!=null){
+				IOUtils.closeQuietly(in);
+			}
+		}
+	}
+
+	/**
+	 * 加载用户扩展的停止词词典
+	 */
+	private void loadStopWordDict(){
+		//建立一个主词典实例
+		_StopWordDict = new DictSegment((char)0);
+		InputStream in = null;
+		try {
+			in = this.cfg.getResourceLoader().openResource(Configuration.STOP_FILE);
+			loadDict(_StopWordDict, in, Configuration.STOP_FILE);
+		} catch (IOException e) {
+			log.error("Stopword Dictionary loading exception.");
+			e.printStackTrace();
+		} finally {
+			if(in == null){
+				throw new RuntimeException("Stopword Dictionary can not be load!!!");
+			}
+			if(in!=null){
+				IOUtils.closeQuietly(in);
+			}
+		}
+	
+	}
+	
+	/**
+	 * 加载量词词典
+	 */
+	private void loadQuantifierDict(){
+		//建立一个量词典实例
+		_QuantifierDict = new DictSegment((char)0);
+		InputStream in = null;
+		try {
+			in = this.cfg.getResourceLoader().openResource(Configuration.QUANTIFIER_FILE);
+			loadDict(_QuantifierDict, in, Configuration.QUANTIFIER_FILE);
+		} catch (IOException e) {
+			log.error("Quantifier Dictionary loading exception.");
+			e.printStackTrace();
+		} finally {
+			if(in == null){
+				throw new RuntimeException("Quantifier Dictionary can not be load!!!");
+			}
+			if(in!=null){
+				IOUtils.closeQuietly(in);
+			}
+		}
+		
+	}
+
+	private void loadDict(DictSegment segment,InputStream is,String type) throws IOException {
+		BufferedReader br = new BufferedReader(new InputStreamReader(is , "UTF-8"), 512);
+		String theWord = null;
+		do {
+			theWord = br.readLine();
+			if (theWord != null && !"".equals(theWord.trim())) {
+				segment.fillSegment(theWord.trim().toLowerCase().toCharArray());
+			}
+		} while (theWord != null);
+	}	
+	
+	public static void initial(Configuration cfg) {
+		if(!dictionaryMap.containsKey(cfg.getResourceLoader())){
+			dictionaryMap.put(cfg.getResourceLoader(), new Dictionary(cfg));
+		}
+	}
+
+}
